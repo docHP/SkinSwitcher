@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "package": "dev.codex.skinswitcher.mixin.client",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "MinecraftAccessor",
+    "YggdrasilServiceAccessor",
+    "AuthlibMinecraftClientAccessor",
+    "AbstractClientPlayerMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "skinswitcher",
+  "version": "${version}",
+  "name": "Skin Switcher",
+  "description": "Manage and preview Minecraft skin presets.",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.codex.skinswitcher.client.SkinSwitcherClient"
+    ]
+  },
+  "mixins": [
+    "skinswitcher.client.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
