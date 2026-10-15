@@ -12,8 +12,11 @@ import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.narration.NarrationElementOutput;
+import net.minecraft.client.gui.screens.ConnectScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.multiplayer.ServerData;
+import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.core.ClientAsset;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
@@ -52,6 +55,10 @@ public final class SkinSwitcherScreen extends Screen {
     private static final int COLOR_SUCCESS = 0xFFA5CE85;
     private static final int COLOR_WARNING = 0xFFE0BE78;
     private static final int COLOR_ERROR = 0xFFE28C7D;
+    private static final int COLOR_RECONNECT_EDGE = 0xFF75C9B3;
+    private static final int COLOR_RECONNECT = 0xFF315E53;
+    private static final int COLOR_RECONNECT_HOVER = 0xFF3D7568;
+    private static boolean reconnectPending;
 
     private final Screen parent;
     private final Map<Path, BufferedImage> thumbnailCache = new HashMap<>();
@@ -95,11 +102,14 @@ public final class SkinSwitcherScreen extends Screen {
     private int previewWidgetHeight;
     private boolean presetsLoaded;
     private boolean uploading;
+    private boolean uploadSucceeded;
+    private boolean reconnecting;
     private boolean renaming;
     private boolean searchOpen;
     private String searchQuery = "";
     private EditBox renameInput;
     private EditBox searchInput;
+    private WardrobeButton actionButton;
     private final List<PresetRowButton> presetRowButtons = new ArrayList<>();
     private double presetScrollOffset;
     private boolean draggingScrollbar;
@@ -122,6 +132,12 @@ public final class SkinSwitcherScreen extends Screen {
 
     @Override
     protected void init() {
+        if (reconnecting) {
+            reconnecting = false;
+            reconnectPending = false;
+            status = Component.translatable("screens.skinswitcher.status.reconnect_failed");
+            statusColor = COLOR_ERROR;
+        }
         if (!presetsLoaded) refreshPresetData(false);
         if (selected != null && selectedPreviewSkin == null) loadSelectedPreview();
         calculateLayout();
@@ -254,10 +270,20 @@ public final class SkinSwitcherScreen extends Screen {
         applyButton.active = selected != null;
         this.addRenderableWidget(applyButton);
         controlX += widths[2] + gap;
-        WardrobeButton uploadButton = new WardrobeButton(controlX, controlY, widths[3], 25,
-                Component.translatable("screens.skinswitcher.upload"), true, button -> upload());
-        uploadButton.active = selected != null && !uploading;
-        this.addRenderableWidget(uploadButton);
+        boolean reconnectAction = uploadSucceeded;
+        Component actionLabel = reconnecting
+                ? Component.translatable("screens.skinswitcher.reconnecting")
+                : Component.translatable(reconnectAction
+                        ? "screens.skinswitcher.reconnect"
+                        : "screens.skinswitcher.upload");
+        actionButton = new WardrobeButton(controlX, controlY, widths[3], 25,
+                actionLabel, !reconnectAction, reconnectAction,
+                button -> {
+                    if (uploadSucceeded) reconnect();
+                    else upload();
+                });
+        actionButton.active = reconnectAction ? !reconnecting : selected != null && !uploading;
+        this.addRenderableWidget(actionButton);
 
         this.addRenderableWidget(new WardrobeButton(frameX + frameWidth - 40, frameY + 12, 24, 22,
                 Component.literal("×"), false, button -> onClose()));
@@ -855,7 +881,10 @@ public final class SkinSwitcherScreen extends Screen {
             } else {
                 switch (result.outcome()) {
                     case ACCEPTED -> {
-                        status = Component.translatable("screens.skinswitcher.status.upload_success");
+                        uploadSucceeded = true;
+                        status = Component.translatable(hasMultiplayerConnection(Minecraft.getInstance())
+                                ? "screens.skinswitcher.status.upload_success"
+                                : "screens.skinswitcher.status.upload_success_no_server");
                         statusColor = COLOR_SUCCESS;
                     }
                     case REJECTED -> {
@@ -878,6 +907,58 @@ public final class SkinSwitcherScreen extends Screen {
             }
             if (Minecraft.getInstance().screen == this) rebuildWidgets();
         }));
+    }
+
+    private void reconnect() {
+        if (!uploadSucceeded || reconnecting) return;
+
+        Minecraft client = Minecraft.getInstance();
+        if (!hasMultiplayerConnection(client)) {
+            status = Component.translatable("screens.skinswitcher.status.no_server");
+            statusColor = COLOR_WARNING;
+            return;
+        }
+
+        ServerData server = client.getCurrentServer();
+        reconnecting = true;
+        reconnectPending = true;
+        status = Component.translatable("screens.skinswitcher.status.reconnecting");
+        statusColor = COLOR_WARNING;
+        actionButton.setMessage(Component.translatable("screens.skinswitcher.reconnecting"));
+        actionButton.active = false;
+
+        try {
+            ConnectScreen.startConnecting(this, client, ServerAddress.parseString(server.ip), server, false, null);
+        } catch (RuntimeException exception) {
+            reconnecting = false;
+            reconnectPending = false;
+            status = Component.translatable("screens.skinswitcher.status.reconnect_failed");
+            statusColor = COLOR_ERROR;
+            actionButton.setMessage(Component.translatable("screens.skinswitcher.reconnect"));
+            actionButton.active = true;
+        }
+    }
+
+    private static boolean hasMultiplayerConnection(Minecraft client) {
+        return client.getConnection() != null && client.getCurrentServer() != null;
+    }
+
+    public static void onClientJoin(Minecraft client) {
+        if (!reconnectPending) return;
+        reconnectPending = false;
+        client.gui.setOverlayMessage(Component.translatable("screens.skinswitcher.status.reconnected"), false);
+    }
+
+    public static boolean isReconnectPending() {
+        return reconnectPending;
+    }
+
+    public static void onReconnectFailed() {
+        reconnectPending = false;
+    }
+
+    public static AbstractWidget createReconnectStatusWidget(int screenWidth) {
+        return new ReconnectStatusWidget(screenWidth);
     }
 
     private void openFolder() {
@@ -1033,6 +1114,10 @@ public final class SkinSwitcherScreen extends Screen {
 
     @Override
     public void onClose() {
+        if (reconnecting) {
+            reconnecting = false;
+            reconnectPending = false;
+        }
         this.minecraft.setScreen(this.parent);
     }
 
@@ -1062,11 +1147,18 @@ public final class SkinSwitcherScreen extends Screen {
 
     private static final class WardrobeButton extends Button {
         private final boolean primary;
+        private final boolean reconnectAccent;
 
         private WardrobeButton(int x, int y, int width, int height, Component message,
                                boolean primary, Button.OnPress onPress) {
+            this(x, y, width, height, message, primary, false, onPress);
+        }
+
+        private WardrobeButton(int x, int y, int width, int height, Component message,
+                               boolean primary, boolean reconnectAccent, Button.OnPress onPress) {
             super(x, y, width, height, message, onPress, DEFAULT_NARRATION);
             this.primary = primary;
+            this.reconnectAccent = reconnectAccent;
         }
 
         @Override
@@ -1076,9 +1168,11 @@ public final class SkinSwitcherScreen extends Screen {
             int right = x + getWidth();
             int bottom = y + getHeight();
             boolean highlighted = isHoveredOrFocused();
-            int edge = !active ? COLOR_MUTED_BRASS : primary ? COLOR_FRAME : COLOR_MUTED_BRASS;
-            int fill = !active ? 0xFF292925 : primary
-                    ? (highlighted ? 0xFFAA813B : 0xFF80612D)
+            int edge = !active ? COLOR_MUTED_BRASS : reconnectAccent ? COLOR_RECONNECT_EDGE
+                    : primary ? COLOR_FRAME : COLOR_MUTED_BRASS;
+            int fill = !active ? 0xFF292925 : reconnectAccent
+                    ? (highlighted ? COLOR_RECONNECT_HOVER : COLOR_RECONNECT)
+                    : primary ? (highlighted ? 0xFFAA813B : 0xFF80612D)
                     : (highlighted ? 0xFF34332B : 0xFF252622);
             int text = active ? COLOR_TEXT : COLOR_MUTED_TEXT;
             graphics.fill(x, y, right, bottom, edge);
@@ -1086,6 +1180,24 @@ public final class SkinSwitcherScreen extends Screen {
             if (highlighted && active) graphics.renderOutline(x, y, getWidth(), getHeight(), COLOR_FRAME);
             graphics.drawCenteredString(Minecraft.getInstance().font, getMessage(),
                     x + getWidth() / 2, y + (getHeight() - 9) / 2, text);
+        }
+    }
+
+    private static final class ReconnectStatusWidget extends AbstractWidget {
+        private ReconnectStatusWidget(int screenWidth) {
+            super(0, 8, screenWidth, 18, Component.translatable("screens.skinswitcher.reconnecting"));
+            this.active = false;
+        }
+
+        @Override
+        protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+            graphics.drawCenteredString(Minecraft.getInstance().font, getMessage(),
+                    getX() + getWidth() / 2, getY() + 4, COLOR_RECONNECT_EDGE);
+        }
+
+        @Override
+        protected void updateWidgetNarration(NarrationElementOutput output) {
+            defaultButtonNarrationText(output);
         }
     }
 

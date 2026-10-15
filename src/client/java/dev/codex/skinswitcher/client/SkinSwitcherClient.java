@@ -13,6 +13,8 @@ import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.ConnectScreen;
+import net.minecraft.client.gui.screens.DisconnectedScreen;
 import net.minecraft.client.gui.screens.PauseScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
@@ -29,10 +31,12 @@ public final class SkinSwitcherClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->
-                SkinPresetStore.activePreset().ifPresent(preset ->
-                        LocalSkinState.load(preset, result -> {
-                        })));
+        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+            SkinPresetStore.activePreset().ifPresent(preset ->
+                    LocalSkinState.load(preset, result -> {
+                    }));
+            SkinSwitcherScreen.onClientJoin(client);
+        });
 
         ClientLifecycleEvents.CLIENT_STARTED.register(client ->
                 SkinPresetStore.activePreset().ifPresent(preset ->
@@ -46,7 +50,11 @@ public final class SkinSwitcherClient implements ClientModInitializer {
         });
 
         ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
-            if (screen instanceof TitleScreen) {
+            if (screen instanceof ConnectScreen && SkinSwitcherScreen.isReconnectPending()) {
+                Screens.getButtons(screen).add(SkinSwitcherScreen.createReconnectStatusWidget(scaledWidth));
+            } else if (screen instanceof DisconnectedScreen && SkinSwitcherScreen.isReconnectPending()) {
+                SkinSwitcherScreen.onReconnectFailed();
+            } else if (screen instanceof TitleScreen) {
                 int width = 58;
                 int height = 66;
                 int x = Math.max(4, scaledWidth - width - 8);
